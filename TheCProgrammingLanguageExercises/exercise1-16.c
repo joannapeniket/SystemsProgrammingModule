@@ -19,15 +19,35 @@ Note that a single call of getline() counts the characters on a SINGLE line, to 
 } */
 
 #include <stdio.h> 
+#define MAXLINE 1000 // just a number - the maximum buffer size you choose
 
-int get_line(char s[], int lim)  // lim is the maximum size of the array s[]
-{
+int get_line(char s[], int lim);  // lim is the maximum size of the array s[]
+
+int main() {
+    int len;  //len = the actual length of the input line read
+    char line[MAXLINE];  //line = the actual array that holds characters
+
+    while ((len = get_line(line, MAXLINE)) > 0) {
+        printf("Length: %d\n", len);
+        printf("Text: %s", line);  // prints the stored text
+
+        if (len > MAXLINE - 1) {
+            printf("...(line continues beyond buffer)\n");
+        }
+    }
+
+    return 0;
+}
+
+int get_line(char s[], int lim) { // lim is the maximum size of the array s[]
+
     int c, i, j; 
     
     for (i=0; i<lim-1 && (c=getchar())!=EOF && c!='\n'; ++i)  // (c=getchar())!=EOF calls getchar() to read one character, assigns it to c and compares it to EOF
+    //lim tells get_line "don't write more than this into the array - in this code, lim = MAXLINE = 1000"
         s[i] = c;  
 
-    if (c == '\n') {  // if newline character wound WITHIN BUFER
+    if (c == '\n') {  // if newline character found WITHIN BUFER
         s[i] = c;
         ++i;
     }
@@ -43,8 +63,3 @@ int get_line(char s[], int lim)  // lim is the maximum size of the array s[]
 
     return j;  // return the true length of the line - not what we just stored
 } 
-
-int main() {
-    char line[100];
-    get_line(line, 100);
-}
