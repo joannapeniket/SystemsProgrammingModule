@@ -240,45 +240,57 @@ static void log_request(const char *request) {  //takes pointer to request strin
     // req_count tracks how many request strings have been logged so far, which is also the index of the next empty slot in the array.
 }
 
+//concatenate every request thats ever been logged from the requesrs array
 static char *handle_R(void) {
-    if (req_count == 0)
-        return make_response("");
+    if (req_count == 0) //no requests yet 
+        return make_response(""); //return an empty string 
 
-    size_t total = 0;
-    for (size_t i = 0; i < req_count; i++)
-        total += strlen(requests[i]) + 1;
+    size_t total = 0; //total is the number of bytes required to hold all the request strings together 
+    for (size_t i = 0; i < req_count; i++) //loop through requests array
+        total += strlen(requests[i]) + 1; //requests is an array of char * pointers, so each requests[i] is a pointer to an individual string. strlen follows that pointer and counts characters until it hits the null terminator of that string.
+        //strlen(requests[i]) = used to count the number of characters in that string (not counting the null terminator)
+        //+1 for the new line that will be appended after each string
 
-    char *response = malloc(total + 1);
-    if (!response) { perror("malloc"); exit(1); }
+    char *response = malloc(total + 1); //malloc allocates enough memory on the heap for entire response string then returns a pointer to that bit of memory which is stored in response
+    //+1 adding extra byte just for the null terminator at the very end of the string
+    if (!response) { perror("malloc"); exit(1); } //error handling - kill program if malloc fails and response is NULL
 
-    char *p = response;
-    for (size_t i = 0; i < req_count; i++) {
-        size_t len = strlen(requests[i]);
-        memcpy(p, requests[i], len);
-        p += len;
-        *p++ = '\n';
+    char *p = response; //create new pointer to the same place as response
+    //p and response point to the start of the memory allocated to the concatenated request strings - but we need to actually move them there - response stays at the start so we can return the concatenated string and p is used to add the individual request strings
+    for (size_t i = 0; i < req_count; i++) { //loop through requests array
+        size_t len = strlen(requests[i]); //records length of each string in requests array as len
+        memcpy(p, requests[i], len); // copy len bytes from requests[i] into the location pointed to by p. It's essentially stamping the characters of each request string into the response buffer.
+        //memcpy(destination, source, number of bytes to copy)
+        p += len; //moves p to after the characters of the string we have just added to the master requests string
+        *p++ = '\n'; //writes a new line character and moves past it so we can start writing the next string 
     }
-    *p = '\0';
+    *p = '\0'; //when we have written out all the requests - write a null terminator at p to properly end the master request string
 
-    return response;
+    return response; //return the string of all the requests
 }
 
 static char *handle_A(const char *request) {
-    const char *rule_str = request + 2;
+    const char *rule_str = request + 2;  //rule_str is like rest - its a pointer to the first element in the ip in the input string (remember that this IS the string - there is no separate string type)
 
-    Rule r = {0};
-    if (!parse_rule(rule_str, &r))
+    Rule r = {0}; //eclares a new rule struct called r and initializes ALL its fields to 0 (with pointer set to NULL)
+    if (!parse_rule(rule_str, &r)) //remember that parse_rule takes an input string and a pointer to where this rule will be stored 
         return make_response("Invalid rule");
-
+    
+    // allocate a new larger block of memory to hold more Rule structs
     if (rule_count == rule_cap) {
-        size_t new_cap = rule_cap == 0 ? 8 : rule_cap * 2;
+        size_t new_cap;
+        if (rule_cap == 0) {
+            new_cap = 8; // first allocation, start at 8
+        } else {
+            new_cap = rule_cap * 2; // already has capacity, double it
+        }
         Rule *tmp = realloc(rules, new_cap * sizeof(Rule));
         if (!tmp) { perror("realloc"); exit(1); }
         rules    = tmp;
         rule_cap = new_cap;
     }
 
-    rules[rule_count++] = r;
+    rules[rule_count++] = r;  //actually adds new rule struct to the next empty slot in the allocated memory
     return make_response("Rule added");
 }
 //C is used to check whether an ip/port pair is valid/well-formed AND if its allowed (according to the rules). Validity is just the first hurdle. After confirming the input is a real IP and a real port number, it then asks "does this pair fall within any of the rules we've stored?" 
@@ -305,7 +317,7 @@ static char *handle_C(const char *request) {  //takes original raw input
         if (ip_in_range(ip, &rules[i]) && port_in_range(port, &rules[i])) { //check the ip and port both fall within the valid range
             //&rules[i] passes a pointer to the current rule so the helper functions can read its fields.
             Rule *r = &rules[i]; //just for convenience - stores &rules[i] as r
-            //same dynamic array check as in log request - grows the queries array to fit
+            //same dynamic array check as in log request - grows the queries array to fit more Query structs 
             if (r->query_count == r->query_cap) {
                 size_t new_cap;
                     if (r->query_cap == 0) {
@@ -318,7 +330,8 @@ static char *handle_C(const char *request) {  //takes original raw input
                 r->queries  = tmp;
                 r->query_cap = new_cap;
             }
-            r->queries[r->query_count].ip   = ip;
+            //writes the new Query into the first empty slot in the queries array
+            r->queries[r->query_count].ip   = ip; //we use the . to access a field inside a struct
             r->queries[r->query_count].port = port;
             r->query_count++;
 
@@ -329,22 +342,21 @@ static char *handle_C(const char *request) {  //takes original raw input
     return make_response("Connection rejected");
 }
 
+//Its job is to free all heap-allocated memory and reset the program back to a clean state.
 static char *handle_F(void) {
-    /* free each rule's queries array */
-    for (size_t i = 0; i < rule_count; i++)
-        free(rules[i].queries);
+    for (size_t i = 0; i < rule_count; i++) //loop through Rule structs
+        free(rules[i].queries); //each Rule struct has a queries array inside it - free each queries array by looping through the rules array
 
-    /* free the rules array itself */
-    free(rules);
-    rules      = NULL;
+    free(rules); //free the memory the rules pointer points to
+    rules = NULL; //rules is now a dangling pointer so set to NULL
     rule_count = 0;
     rule_cap   = 0;
 
-    /* free the request log */
-    for (size_t i = 0; i < req_count; i++)
-        free(requests[i]);
-    free(requests);
-    requests  = NULL;
+    //requests[i] is the string, requests is the array that holds all the pointers to those strings.
+    for (size_t i = 0; i < req_count; i++) //loop through the requests
+        free(requests[i]); //frees each individual request string on the heap 
+    free(requests); //frees the array of pointers itself
+    requests  = NULL;  //requests is now a dangling pointer so set to NULL
     req_count = 0;
     req_cap   = 0;
 
@@ -352,13 +364,13 @@ static char *handle_F(void) {
 }
 
 static char *handle_D(const char *request) {
-    const char *rule_str = request + 2;
+    const char *rule_str = request + 2; //rest is a pointer to the first element in the ip address on the input string (request is a pointer to the very first element in the input string so + 2 moves it to the first element in the ip)
 
-    Rule r = {0};
-    if (!parse_rule(rule_str, &r))
+    Rule r = {0};  //creates a new temporary rule struct on the stack called r and initialises all fields to 0
+    if (!parse_rule(rule_str, &r)) //parse the rule we have created (actually want to delete) but dont add it to the rules array
         return make_response("Invalid rule");
 
-    /* find exact match */
+    /* find exact match for this rule in the Rule structs */
     for (size_t i = 0; i < rule_count; i++) {
         if (rules[i].ip_start   == r.ip_start  &&
             rules[i].ip_end     == r.ip_end     &&
@@ -370,6 +382,10 @@ static char *handle_D(const char *request) {
 
             /* shift remaining rules down */
             memmove(&rules[i], &rules[i+1], (rule_count - i - 1) * sizeof(Rule));
+            /*memmove copies a block of memory from one location to another. It takes three arguments:
+            - destination — `&rules[i]`, where to copy to
+            - source — `&rules[i+1]`, where to copy from  
+            - size — how many bytes to copy */
             rule_count--;
 
             return make_response("Rule deleted");
@@ -377,7 +393,7 @@ static char *handle_D(const char *request) {
     }
 
     return make_response("Rule not found");
-}
+} //the temporary rule we create in order to find it in the rules array lives on the stack so it is deleted when the function returns
 
 static char *handle_L(void) {
     if (rule_count == 0)
