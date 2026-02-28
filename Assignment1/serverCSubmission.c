@@ -23,7 +23,7 @@ typedef struct {
 
 static Rule *rules;  //pointer to the dynamic array of Rule structs
 static size_t rule_count, rule_cap;  
-static char **requests;  //** means a pointer to a pointer so **requests is a pointer to dynamic array of strings
+static char **requests;  //pointer to a dynamically allocated array of char* pointers, each pointing to a request string
 static size_t req_count, req_cap;
 static pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER; //thread-safety mechanism
 
@@ -128,7 +128,14 @@ static char *make_response(const char *s) {  //called inside handler functions w
     return r;
 }
 
-//DAY 5 - ip_to_str
+static void ip_to_str(uint32_t ip, char *buf) {
+    sprintf(buf, "%u.%u.%u.%u", 
+            (ip >> 24) & 0xFF
+            (ip >> 16) & 0xFF
+            (ip >> 8)  & 0xFF
+            ip         & 0xFF); //sprintf takes a pointer to where to write the output, the format string telling it how to write the output and 4 integers to write
+            //shifting the 32-bit string then & 0xFF has the effect of isolating each 8 bit chunk
+}
 
 //keeps a record of every request that comes into the server in the order they arrived 
 static void log_request(const char *request) {
@@ -150,7 +157,29 @@ static void log_request(const char *request) {
     req_count++;
 }
 
-//DAY 5 - static char *handle_R(void) {
+//concatenate every request thats ever been logged
+static char *handle_R(void) {
+    if (req_count == 0)
+        return make_response("");
+
+        size_t total = 0; //total created to store number of bytes required to store all request strings 
+        for (size_t i = 0; i < req_count; i++)
+            total += strlen(requests[i]) + 1;  //+1 to each string for '\n'
+
+        char *response = malloc(total + 1); //allocated enough memory for total + 1 ('\0' at the end) and returns a pointer to it called response
+        if (!response) { perror("malloc"); exit(1); }
+
+        char *p = response;  //creates new pointer to same place in memory as response called p
+        for (size_t i = 0; i < req_count; i++) {
+            size_t len = strlen(requests[i]);
+            memcpy(p, requests[i], len); //copies len bytes from requests[i] to p
+            p += len; //moves p beyond newly written string
+            *p++ = '\n';  //writes '\n' then moves past it to start writing the next string 
+        }
+        *p = '\0'; //properly ends the string of all requests with '\0'
+
+        return response; //return string of all requests
+}
 
 //create rule
 static char *handle_A(const char *request) {
@@ -160,7 +189,7 @@ static char *handle_A(const char *request) {
     if (!parse_rule(rule_str, &r))  //calls parse rule on the rule_str string (starting at the element it points to - the start of the ip address)
         return make_response("Invalid rule");
 
-    //resize rules array to hold more Rule structs, and store the result in tmp
+    //allocate a new larger block of memory to hold more Rule structs, and store the result in tmp
     if (rule_count == rule_cap) {
         size_t new_cap;
         if(rule_cap == 0) {
@@ -174,7 +203,7 @@ static char *handle_A(const char *request) {
         rule_cap = new_cap;
     }
 
-    rules[rule_count++] = r;  //adds new Rule struct r to the first empty slot in the rules array
+    rules[rule_count++] = r;  //adds new Rule struct r to the first empty slot in the allocated memory 
     return make_response("Rule added");
 }
 
@@ -198,7 +227,7 @@ static char *handle_C(const char *request) {
     if (!parse_ip(ip_str, &ip) || !parse_port(port_str, &port))
         return make_response("Illegal IP address or port specified");
 
-    for (size_t i = 0; i < rule_count; i++) { //loop through rules array
+    for (size_t i = 0; i < rule_count; i++) { //loop through Rule structs
         if (ip_in_range(ip, &rules[i]) && port_in_range(port, &rules[i])) { 
             Rule *r = &rules[i];
             //resize queries array to hold more Query structs, and store the result in tmp
@@ -226,6 +255,26 @@ static char *handle_C(const char *request) {
     return make_response("Connection rejected");
 }
 
+//frees all heap-allocated memory and resests the program back to a clean state
+static char *handle_F(void) {
+    for (size_t i = 0; i < rule_count; i++) //loop through Rule structs
+        free(rules[i].queries) //free queries array inside each Rule struct
+
+    free(rules); //free memory the rules pointer points to
+    rules = NULL; //rules is now a dangling pointer - set to NULL
+    rule_count = 0;
+    rule_cap = 0;
+
+    for (size_t i = 0; i < req_count; i++) //loop through all requests 
+        free(requests[i]); //free each request string
+    free(requests); //free memory the requests pointer points to 
+    requests = NULL;  //requests is now a dangling pointer - set to NULL
+    req_count = 0;
+    req_cap = 0;
+
+    return make_response("All rules deleted");
+}
+
 //delete rule
 static char *handle_D(const char *request) {
     const char *rule_str = request + 2;
@@ -234,7 +283,7 @@ static char *handle_D(const char *request) {
     if (!parse_rule(rule_str, &r)) //parses rule_str and writes result at &r
         return make_response("Invalid rule");
 
-    //searches rules array for exact match with the temporary rule just created
+    //searches through Rule structs for exact match with the temporary rule just created
     for (size_t i = 0; i < rule_count; i++) {
         if (rules[i].ip_start == r.ip_start &&
             rules[i].ip_end == r.ip_end &&
@@ -256,5 +305,78 @@ static char *handle_D(const char *request) {
     return make_response("Rule not found");
 }  //temporary rule on stack deleted when the function returns
 
+//builds and returns a string that stores every rule, and under each rule, every query that matched it 
+static char *handle_L(void) {
+    if (rule_count == 0)
+        return make_response("");
 
+    //first pass: calculates memory required to store string
+    size_t total = 0;
+    for(size_t i = 0; i < rule_count; i++) {
+        Rule *r = &rules[i];
+
+        char ip1[16], ip2[16]; 
+        ip_to_str(r -> ip_start, ip1);
+        ip_to_str(r -> ip_end, ip1);
+
+        if (r -> ip_start == r -> ip_end)
+            total += strlen("Rule: ") + strlen(ip1);
+        else
+            total += strlen("Rule: ") + strlen(ip1) + 1 + strlen(ip2);
+
+        if (r -> port_start == r -> port_end)
+            total += 1 + 5;
+        else
+            total += 1 + 5 + 1 + 5;
+
+            total += 1;
+
+        for (size_t j = 0; j < query_count; j++) {
+            char qip[16];
+            ip_to_str(r -> queries[j].ip, qip);
+            total += strlen("Query: ") + strlen(qip) + 1 + 5 + 1;
+        }
+    }
+
+    char *response = malloc(total + 1);
+    if (!response) { perror("malloc");  exit(1); }
+
+    char *p = response;
+    //second pass: writes string 
+    for (size_t i = 0; i < rule_count; i++) {
+        Rule *r = &rules[i];
+
+        char ip1[16], ip2[16];
+        ip_to_str(r -> ip_start, ip1);
+        ip_to_str(r -> ip_end, ip1);
+
+        if (r -> ip_start == r -> ip_end)
+            p += sprintf(p, "Rule: %s", ip1)
+        else
+            p += sprintf(p, "Rule: %s-%s", ip1, ip2);
+
+        if (r -> port_start == r -> port_end)
+            p += sprintf(p, "%d\n", port_start);
+        else
+            p += sprintf(p, "%d-%d\n", port_start, port_end);
+
+        for (size_t j = 0; j < query_count; j++) {
+            char qip[16];
+            ip_to_str(r -> queries[j].ip, qip);
+            p += sprintf(p, "Query: %s %d\n", qip, r -> queries[j].port);
+        }
+    }
+    *p = '\0'
+
+    return response;
+    }
+    
+    extern char *processRequest(char *request);
+
+
+
+
+        
+
+    
 
