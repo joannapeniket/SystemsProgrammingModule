@@ -206,12 +206,42 @@ static char *make_response(const char *s) {  //called inside the handler functio
 }
 
 //DAY 5
-static void ip_to_str(uint32_t ip, char *buf) {
-    sprintf(buf, "%u.%u.%u.%u",
-            (ip >> 24) & 0xFF,
-            (ip >> 16) & 0xFF,
-            (ip >>  8) & 0xFF,
-             ip        & 0xFF);
+static void ip_to_str(uint32_t ip, char *buf) { //takes a 32 bit integer and a pointer to the memory to write the string into
+    sprintf(buf, "%u.%u.%u.%u", //passes the 32 bit integer to sprintf - writes a formatted output into buf
+            (ip >> 24) & 0xFF, //shift bits 24 places to the right (24 bits will 'fall off the end' and disappear) - & 0xFF doesnt actually do anything here - its just there for safety and consistency
+            (ip >> 16) & 0xFF, //shift bits 16 places to the right then & with 0xFF 
+            (ip >>  8) & 0xFF, //etc
+             ip        & 0xFF); //etc - but no shift required
+             //0xFF is the hexadecimal number 255 which is 11111111 in binary
+             //& (the bitwise AND operation) means 
+             //so sprintf takes buf - the pointer to the memory to write the string into, "%u.%u.%u.%u" - the format string telling it how to arrange the values in the output and the four integers to actually insert 
+
+/* e.g.,
+
+(ip >> 24) & 0xFF → 147
+Shift right 24 bits, moving the first octet to the bottom:
+00000000 00000000 00000000 10010011
+& 0xFF
+00000000 00000000 00000000 10010011  =  147
+
+(ip >> 16) & 0xFF → 188
+Shift right 16 bits, moving the second octet to the bottom:
+00000000 00000000 10010011 10111100
+& 0xFF
+00000000 00000000 00000000 10111100  =  188 
+
+(ip >> 8) & 0xFF → 192
+Shift right 8 bits:
+00000000 10010011 10111100 11000000
+& 0xFF
+00000000 00000000 00000000 11000000  =  192
+
+ip & 0xFF → 43
+No shift needed, fourth octet is already at the bottom:
+10010011 10111100 11000000 00101011
+& 0xFF
+00000000 00000000 00000000 00101011  =  43
+*/
 }
 
 //keeps a record of every request that comes into the server, in order. This is so the R command can later return the full history of all requests that have been made.
@@ -395,57 +425,57 @@ static char *handle_D(const char *request) {
     return make_response("Rule not found");
 } //the temporary rule we create in order to find it in the rules array lives on the stack so it is deleted when the function returns
 
+//its job is to build and return a string that shows every stored rule, and under each rule, every query that matched it.
 static char *handle_L(void) {
-    if (rule_count == 0)
-        return make_response("");
+    if (rule_count == 0)  //edge case - if there are no rules
+        return make_response(""); //return empty string
 
-    /* first pass: calculate total length needed */
-    size_t total = 0;
-    for (size_t i = 0; i < rule_count; i++) {
-        Rule *r = &rules[i];
+    /* first pass: calculate total length/number of bytes needed */
+    size_t total = 0; //total = number of bytes needed to store the string L will return
+    for (size_t i = 0; i < rule_count; i++) { //loop through Rule structs
+        Rule *r = &rules[i]; //create pointer to each Rule struct stored in memory starting where the rules pointer points to 
 
-        /* "Rule: " + ip_start */
         char ip1[16], ip2[16];
-        ip_to_str(r->ip_start, ip1);
-        ip_to_str(r->ip_end,   ip2);
+        ip_to_str(r->ip_start, ip1); //calls ip_to_str on r -> ip_start (32-string) and ip1 (pointer to 16 bit formatted raw ip address)
+        ip_to_str(r->ip_end,   ip2); //if the rule is a single ip then ip_start and ip_end are pointers to the same value. if the rule is a range then ip_end points to the start of the second ip
 
-        if (r->ip_start == r->ip_end)
-            total += strlen("Rule: ") + strlen(ip1);
-        else
-            total += strlen("Rule: ") + strlen(ip1) + 1 + strlen(ip2); /* +1 for '-' */
+        if (r->ip_start == r->ip_end) //if the rule is a single allowed ip
+            total += strlen("Rule: ") + strlen(ip1); //increase total by length of "Rule: " and the length of the formatted string
+        else //if the rule is a range of valid ips
+            total += strlen("Rule: ") + strlen(ip1) + 1 + strlen(ip2); // +1 for '-' 
 
         /* " " + port */
-        if (r->port_start == r->port_end)
+        if (r->port_start == r->port_end) //single valid port address
             total += 1 + 5; /* space + up to 5 digit port */
-        else
+        else //range of valid port addresses
             total += 1 + 5 + 1 + 5; /* space + port-port */
 
         total += 1; /* newline */
 
-        /* queries */
-        for (size_t j = 0; j < r->query_count; j++) {
-            char qip[16];
-            ip_to_str(r->queries[j].ip, qip);
+        /* goes through queries that matched the rule of the current loop iteration */
+        for (size_t j = 0; j < r->query_count; j++) { //loop through Query structs that matched the given rule
+            char qip[16]; //declares 16 byte buffer on stack to hold query's ip in dotted decimal form
+            ip_to_str(r->queries[j].ip, qip); //accesses each query struct for given rule and specifically the ip (the 32 bit string to convert to dotted decimal form) and qip (the place to write to)
             total += strlen("Query: ") + strlen(qip) + 1 + 5 + 1; /* ip + space + port + newline */
         }
     }
 
-    char *response = malloc(total + 1);
-    if (!response) { perror("malloc"); exit(1); }
+    char *response = malloc(total + 1); //allocate enough space in memory for total + 1 ('\0') and return pointer to it called response
+    if (!response) { perror("malloc"); exit(1); } //error handling for malloc
 
     /* second pass: fill the response */
-    char *p = response;
-    for (size_t i = 0; i < rule_count; i++) {
-        Rule *r = &rules[i];
+    char *p = response; //create new pointer to same location as response so that we can still return response at the end of the second pass
+    for (size_t i = 0; i < rule_count; i++) { //loop through Rule structs
+        Rule *r = &rules[i]; //assign pointer r to each Rule struct in turn (effectively going through an array with a pointer called r to each element in turn)
 
         char ip1[16], ip2[16];
         ip_to_str(r->ip_start, ip1);
         ip_to_str(r->ip_end,   ip2);
 
-        if (r->ip_start == r->ip_end)
-            p += sprintf(p, "Rule: %s", ip1);
-        else
-            p += sprintf(p, "Rule: %s-%s", ip1, ip2);
+        if (r->ip_start == r->ip_end) //if rule is one allowed ip
+            p += sprintf(p, "Rule: %s", ip1); //sprintf takes pointer to location to write to, formatting string and what to write (formatted ip address)
+        else //if rule is a range of allowed ips
+            p += sprintf(p, "Rule: %s-%s", ip1, ip2); 
 
         if (r->port_start == r->port_end)
             p += sprintf(p, " %d\n", r->port_start);
@@ -455,10 +485,10 @@ static char *handle_L(void) {
         for (size_t j = 0; j < r->query_count; j++) {
             char qip[16];
             ip_to_str(r->queries[j].ip, qip);
-            p += sprintf(p, "Query: %s %d\n", qip, r->queries[j].port);
+            p += sprintf(p, "Query: %s %d\n", qip, r->queries[j].port); //write to p, formatting, formatted ip, port
         }
     }
-    *p = '\0';
+    *p = '\0'; //finish string with null terminator
 
     return response;
 }
