@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <ctype.h>
 
+extern char *processRequest(char *request);
+
 // Query struct records single IP + port pair 
 typedef struct {
     uint32_t ip;  //uint32_t is the unsigned 32-bit integer type defined in <stdint.h>
@@ -95,7 +97,7 @@ static int parse_rule(const char *s, Rule *out) {  //takes const char *s - the i
     } else {
         //handles single valid ip address rather than valid ip range 
         if (!parse_ip(ip_part, &out -> ip_start)) return 0;
-        out -> ip_end = out -> ip_start; //sets ip_start and ip_end to the same value
+        out -> ip_end = out -> ip_start; //sets ip_start and ip_end to the same value (rule allows single valid ip)
     }
 
     //searches for '-' that would indicate a valid port range rather than a single valid port number
@@ -130,9 +132,9 @@ static char *make_response(const char *s) {  //called inside handler functions w
 
 static void ip_to_str(uint32_t ip, char *buf) {
     sprintf(buf, "%u.%u.%u.%u", 
-            (ip >> 24) & 0xFF
-            (ip >> 16) & 0xFF
-            (ip >> 8)  & 0xFF
+            (ip >> 24) & 0xFF,
+            (ip >> 16) & 0xFF,
+            (ip >> 8)  & 0xFF,
             ip         & 0xFF); //sprintf takes a pointer to where to write the output, the format string telling it how to write the output and 4 integers to write
             //shifting the 32-bit string then & 0xFF has the effect of isolating each 8 bit chunk
 }
@@ -162,23 +164,23 @@ static char *handle_R(void) {
     if (req_count == 0)
         return make_response("");
 
-        size_t total = 0; //total created to store number of bytes required to store all request strings 
-        for (size_t i = 0; i < req_count; i++)
-            total += strlen(requests[i]) + 1;  //+1 to each string for '\n'
+    size_t total = 0; //total created to store number of bytes required to store all request strings 
+    for (size_t i = 0; i < req_count; i++)
+        total += strlen(requests[i]) + 1;  //+1 to each string for '\n'
 
-        char *response = malloc(total + 1); //allocated enough memory for total + 1 ('\0' at the end) and returns a pointer to it called response
-        if (!response) { perror("malloc"); exit(1); }
+    char *response = malloc(total + 1); //allocated enough memory for total + 1 ('\0' at the end) and returns a pointer to it called response
+    if (!response) { perror("malloc"); exit(1); }
 
-        char *p = response;  //creates new pointer to same place in memory as response called p
-        for (size_t i = 0; i < req_count; i++) {
-            size_t len = strlen(requests[i]);
-            memcpy(p, requests[i], len); //copies len bytes from requests[i] to p
-            p += len; //moves p beyond newly written string
-            *p++ = '\n';  //writes '\n' then moves past it to start writing the next string 
-        }
-        *p = '\0'; //properly ends the string of all requests with '\0'
+    char *p = response;  //creates new pointer to same place in memory as response called p
+    for (size_t i = 0; i < req_count; i++) {
+        size_t len = strlen(requests[i]);
+        memcpy(p, requests[i], len); //copies len bytes from requests[i] to p
+        p += len; //moves p beyond newly written string
+        *p++ = '\n';  //writes '\n' then moves past it to start writing the next string 
+    }
+       *p = '\0'; //properly ends the string of all requests with '\0'
 
-        return response; //return string of all requests
+    return response; //return string of all requests
 }
 
 //create rule
@@ -258,7 +260,7 @@ static char *handle_C(const char *request) {
 //frees all heap-allocated memory and resests the program back to a clean state
 static char *handle_F(void) {
     for (size_t i = 0; i < rule_count; i++) //loop through Rule structs
-        free(rules[i].queries) //free queries array inside each Rule struct
+        free(rules[i].queries); //free queries array inside each Rule struct
 
     free(rules); //free memory the rules pointer points to
     rules = NULL; //rules is now a dangling pointer - set to NULL
@@ -310,72 +312,102 @@ static char *handle_L(void) {
     if (rule_count == 0)
         return make_response("");
 
-    //first pass: calculates memory required to store string
-    size_t total = 0;
+    //first pass: calculates number of bytes required to store string
+    size_t total = 0; //total tracks necessary number of bytes to store string
     for(size_t i = 0; i < rule_count; i++) {
         Rule *r = &rules[i];
 
         char ip1[16], ip2[16]; 
-        ip_to_str(r -> ip_start, ip1);
-        ip_to_str(r -> ip_end, ip1);
+        ip_to_str(r -> ip_start, ip1); //converts 32-bit int for each rule to formatted ip string and writes to ip1 (ip_start is the first ip in allowed range)
+        ip_to_str(r -> ip_end, ip2); //converts 32-bit int for each rule to formatted ip string and writes to ip2 (ip_end is the second ip in allowed range OR the same as ip_start if there is only one allowed ip in rule)
 
-        if (r -> ip_start == r -> ip_end)
+        if (r -> ip_start == r -> ip_end) //if the rule allows a single valid ip (ip_start and ip_end hold the same value)
             total += strlen("Rule: ") + strlen(ip1);
-        else
+        else //if the rule allows a range of valid ips
             total += strlen("Rule: ") + strlen(ip1) + 1 + strlen(ip2);
 
-        if (r -> port_start == r -> port_end)
-            total += 1 + 5;
-        else
-            total += 1 + 5 + 1 + 5;
+        if (r -> port_start == r -> port_end) //if the rule allows a single valid port
+            total += 1 + 5; //(space between ip and port + port)
+        else //if the rule allows a range of valid ports
+            total += 1 + 5 + 1 + 5; //(space between ip and port + port + '-' + port)
 
-            total += 1;
+        total += 1; //total + '\n'
 
-        for (size_t j = 0; j < query_count; j++) {
-            char qip[16];
-            ip_to_str(r -> queries[j].ip, qip);
-            total += strlen("Query: ") + strlen(qip) + 1 + 5 + 1;
+        for (size_t j = 0; j < r -> query_count; j++) {
+            char qip[16]; //declares 16 byte buffer to store each query's formatted ip which has been accepted by each rule
+            ip_to_str(r -> queries[j].ip, qip); //writes formatted ip for each query to qip
+            total += strlen("Query: ") + strlen(qip) + 1 + 5 + 1; //calculates bytes needed to store each Query 
         }
     }
 
-    char *response = malloc(total + 1);
+    char *response = malloc(total + 1); //allocates enough memory on the heap to store total + '\0' and returns pointer to it called response
     if (!response) { perror("malloc");  exit(1); }
 
-    char *p = response;
+    char *p = response; //creates pointer to the same location as response for the second pass
     //second pass: writes string 
     for (size_t i = 0; i < rule_count; i++) {
         Rule *r = &rules[i];
 
         char ip1[16], ip2[16];
         ip_to_str(r -> ip_start, ip1);
-        ip_to_str(r -> ip_end, ip1);
+        ip_to_str(r -> ip_end, ip2);
 
         if (r -> ip_start == r -> ip_end)
-            p += sprintf(p, "Rule: %s", ip1)
+            p += sprintf(p, "Rule: %s", ip1); //calls sprintf on parameters (returns length of output) and moves p pointer along by that number of characters to the next empty slot
         else
             p += sprintf(p, "Rule: %s-%s", ip1, ip2);
 
         if (r -> port_start == r -> port_end)
-            p += sprintf(p, "%d\n", port_start);
+            p += sprintf(p, "%d\n", r -> port_start);
         else
-            p += sprintf(p, "%d-%d\n", port_start, port_end);
+            p += sprintf(p, "%d-%d\n", r -> port_start, r -> port_end);
 
-        for (size_t j = 0; j < query_count; j++) {
+        for (size_t j = 0; j < r -> query_count; j++) {
             char qip[16];
             ip_to_str(r -> queries[j].ip, qip);
             p += sprintf(p, "Query: %s %d\n", qip, r -> queries[j].port);
         }
     }
-    *p = '\0'
+    *p = '\0';
 
     return response;
     }
     
-    extern char *processRequest(char *request);
+    char *processRequest(char *request) { 
+
+        //trim trailing whitespace characters
+        size_t len = strlen(request);
+        while(len < 0 && isspace((unsigned char)request[len - 1])) //while request is non-empty and last character is whitespace/trailing character - keep going
+        //isspace returns true for any whitespace character: space ' ', tab '\t', newline '\n', carriage return '\r', vertical tab '\v', and form feed '\f'
+            request[len--] = '\0'; //overwrite any whitespace characters at the end of request string with '\0'
+
+        pthread_mutex_lock(&global_lock);  //ensures that if two threads call processRequest at the same time, only one can be inside the critical section at a time
+        log_request(request);
+            
+        char *response;
+
+        if (strcmp(request, "R" ) == 0)  //R takes no arguments - if statement returns 1/true if strings match (0 == 0)
+            response = handle_R();
+        else if (strncmp(request, "A ", 2) == 0) //if statement returns true if first 2 characters of strings match (0 == 0)
+        /* strncmp(string1, string2, n): n = how many characters to check, starting from the beginning */
+            response = handle_A(request);
+        else if (strncmp(request, "C ", 2) == 0) //if statement returns true if first 2 characters of strings match (0 == 0)
+            response = handle_C(request);
+        else if (strcmp(request, "F" ) == 0)  //F takes no arguments  - if statement returns 1/true if strings match (0 == 0)
+            response = handle_F();
+        else if (strncmp(request, "D ", 2) == 0) //if statement returns true if first 2 characters of strings match (0 == 0)
+            response = handle_D(request);
+        else if (strcmp(request, "L" ) == 0)  //L takes no arguments  - if statement returns 1/true if strings match (0 == 0)
+            response = handle_L();
+
+        pthread_mutex_unlock(&global_lock);
+        return response;
+    }
 
 
-
-
+        
+    
+    
         
 
     

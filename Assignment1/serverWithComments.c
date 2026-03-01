@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <ctype.h>
 
+extern char *processRequest(char *request);
+
 /* A client says "I want to connect from IP 147.188.192.43 on port 22" — the firewall checks its list of rules, and either waves it through or blocks it. 
 This program is the firewall rule engine. It's a software simulation of firewall rule management — it stores rules and evaluates connections against them, but it doesn't actually block any network traffic. It's essentially the logic layer that a real firewall would use. */
 
@@ -475,7 +477,7 @@ static char *handle_L(void) {
         if (r->ip_start == r->ip_end) //if rule is one allowed ip
             p += sprintf(p, "Rule: %s", ip1); //sprintf takes pointer to location to write to, formatting string and what to write (formatted ip address)
         else //if rule is a range of allowed ips
-            p += sprintf(p, "Rule: %s-%s", ip1, ip2); 
+            p += sprintf(p, "Rule: %s-%s", ip1, ip2); //calls sprintf on parameters (returns length of output) and moves p pointer along but that number of characters to the next empty slot
 
         if (r->port_start == r->port_end)
             p += sprintf(p, " %d\n", r->port_start);
@@ -485,7 +487,7 @@ static char *handle_L(void) {
         for (size_t j = 0; j < r->query_count; j++) {
             char qip[16];
             ip_to_str(r->queries[j].ip, qip);
-            p += sprintf(p, "Query: %s %d\n", qip, r->queries[j].port); //write to p, formatting, formatted ip, port
+            p += sprintf(p, "Query: %s %d\n", qip, r->queries[j].port); //(write to p, formatting, formatted ip, port)
         }
     }
     *p = '\0'; //finish string with null terminator
@@ -493,33 +495,41 @@ static char *handle_L(void) {
     return response;
 }
 
-extern char *processRequest(char *request);
+char *processRequest(char *request) { //public API that ties everything together
+    // trim trailing whitespace 
+    size_t len = strlen(request); //len stores length of request string (A/F/D/C/L/R ip(-ip) port(-port))
+    while (len > 0 && isspace((unsigned char)request[len-1])) //while the string is non-empty and the last character is whitespace, keep going
+    //isspace is a standard C library function, declared in <ctype.h> - returns true for any whitespace character: space ' ', tab '\t', newline '\n', carriage return '\r', vertical tab '\v', and form feed '\f'.
+        request[--len] = '\0'; //decrements from end of request string - overwriting with \0 if the while loop finds any trailing or whitespace
 
-char *processRequest(char *request) {
-    /* trim trailing whitespace in case harness sends "rule\n" */
-    size_t len = strlen(request);
-    while (len > 0 && isspace((unsigned char)request[len-1]))
-        request[--len] = '\0';
-
-    pthread_mutex_lock(&global_lock);
+    pthread_mutex_lock(&global_lock); //ensures that if two threads call processRequest at the same time, only one can be inside the critical section at a time. 
     log_request(request);
 
-    char *response;
+    char *response; //declare pointer to characte
 
-    if (strcmp(request, "R") == 0)
+/* strncmp(string1, string2, n)
+
+string1 — the first string to compare (here, the request)
+string2 — the second string to compare against (here, "A ")
+n — how many characters to check, always starting from the beginning */
+
+    if (strcmp(request, "R") == 0)//R takes no arguments
+    //strcmp = string compare - strcmp returns 0 if strings are equal - the if statement returns 1/true if string is exactly R (0 == 0)
         response = handle_R();
-    else if (strncmp(request, "A ", 2) == 0)
+    else if (strncmp(request, "A ", 2) == 0) //Check first 2 characters in request against "A " and returns 1 is it matches (0 == 0 is true)
         response = handle_A(request);
-    else if (strncmp(request, "C ", 2) == 0)
+    else if (strncmp(request, "C ", 2) == 0) //Check first 2 characters in request against "C " and returns 1 is it matches (0 == 0 is true)
         response = handle_C(request);
-    else if (strcmp(request, "F") == 0)
+    else if (strcmp(request, "F") == 0) //F takes no arguments
+       //strcmp = string compare - strcmp returns 0 if strings are equal - the if statement returns 1/true if string is exactly R (0 == 0)
         response = handle_F();
-    else if (strncmp(request, "D ", 2) == 0)
+    else if (strncmp(request, "D ", 2) == 0) //Check first 2 characters in request against "D " and returns 1 is it matches (0 == 0 is true)
         response = handle_D(request);
-    else if (strcmp(request, "L") == 0)
+    else if (strcmp(request, "L") == 0) //L takes no arguments
+    //strcmp = string compare - strcmp returns 0 if strings are equal - the if statement returns 1/true if string is exactly R (0 == 0)
         response = handle_L();
     else
-        response = make_response("Illegal request");
+        response = make_response("Illegal request"); //if nothing matches - return illegal request 
 
     pthread_mutex_unlock(&global_lock);
     return response;
